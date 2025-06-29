@@ -11,7 +11,7 @@ from vertexai.generative_models import GenerativeModel, Part
 # --- Configuration ---
 # You can leave these as they are if you followed the naming convention.
 # Make sure to replace [your-initials] with the same initials you used for your bucket names.
-REPORTS_BUCKET_NAME = "esl-feedback-reports-[your-initials]"
+REPORTS_BUCKET_NAME = "esl-feedback-reports-cloudgens"
 PROJECT_ID = "esl-feedback-agent" # Use your Project ID
 LOCATION = "us-central1" # Use the same region as your function
 
