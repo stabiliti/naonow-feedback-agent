@@ -1,5 +1,5 @@
 # main.py
-# This is the Python code for your Cloud Function.
+# This is the complete, updated Python code for your multi-user Cloud Function.
 
 import functions_framework
 from google.cloud import speech
@@ -9,10 +9,10 @@ import vertexai
 from vertexai.generative_models import GenerativeModel, Part
 
 # --- Configuration ---
-# You can leave these as they are if you followed the naming convention.
-# Make sure to replace [your-initials] with the same initials you used for your bucket names.
-REPORTS_BUCKET_NAME = "esl-feedback-reports-cloudgens"
-PROJECT_ID = "esl-feedback-agent" # Use your Project ID
+# This section is now updated with the bucket name you provided.
+# You still need to replace [YOUR_PROJECT_ID] with your actual Project ID.
+REPORTS_BUCKET_NAME = "esl-feedback-reports-cloudgens" 
+PROJECT_ID = "Esl-Feedback-Agent" # IMPORTANT: Replace with your actual Project ID from Google Cloud.
 LOCATION = "us-central1" # Use the same region as your function
 
 # This function is triggered when a file is uploaded to the video bucket.
@@ -20,49 +20,62 @@ LOCATION = "us-central1" # Use the same region as your function
 def esl_video_analyzer(cloud_event):
     """
     This function is triggered by a video upload to a GCS bucket.
-    It transcribes the video, analyzes it with Gemini, and saves a report.
+    It transcribes the video, analyzes it with Gemini, and saves a report
+    to a user-specific folder.
     """
     data = cloud_event.data
     bucket_name = data["bucket"]
-    file_name = data["name"]
+    file_path = data["name"]  # This will be like "uploads/user123/video.mp4"
+    
+    print(f"New file detected: gs://{bucket_name}/{file_path}")
 
-    print(f"Processing file: {file_name} from bucket: {bucket_name}.")
+    # --- NEW: Extract User ID and Filename from the path ---
+    try:
+        # The path is expected to be "folder/userID/filename"
+        # For example: "uploads/abc123xyz/my-lesson-1.mp4"
+        parts = file_path.split('/')
+        if len(parts) < 3 or not parts[0] == "uploads":
+             print(f"File path '{file_path}' is not in the expected 'uploads/userID/filename' format. Aborting.")
+             return
 
-    # --- Step 1: Transcribe the Video using Speech-to-Text ---
-    gcs_uri = f"gs://{bucket_name}/{file_name}"
-    transcript = transcribe_video(gcs_uri)
-
-    if not transcript:
-        print("Could not transcribe video. Aborting.")
+        user_id = parts[1]
+        file_name = parts[2]
+        print(f"Processing file: '{file_name}' for user: '{user_id}'.")
+    except IndexError:
+        print(f"File path '{file_path}' is not in the expected format 'uploads/userID/filename'. Aborting.")
         return
 
-    print("Successfully transcribed video.")
+    # --- Step 1: Transcribe the Video ---
+    gcs_uri = f"gs://{bucket_name}/{file_path}"
+    transcript = transcribe_video(gcs_uri)
+    
+    if not transcript:
+        print(f"Could not transcribe video for user {user_id}. Aborting.")
+        return
+    print(f"Successfully transcribed video for user {user_id}.")
 
     # --- Step 2: Analyze Transcript with Gemini ---
     feedback_report = generate_feedback_report(transcript)
 
     if not feedback_report:
-        print("Could not generate feedback report. Aborting.")
+        print(f"Could not generate report for user {user_id}. Aborting.")
         return
+    print(f"Successfully generated report for user {user_id}.")
+        
+    # --- Step 3: Save the Report to the user's private folder ---
+    save_report(user_id, file_name, feedback_report)
 
-    print("Successfully generated feedback report.")
-
-    # --- Step 3: Save the Report to the other bucket ---
-    save_report(file_name, feedback_report)
-
-    print(f"Process complete for {file_name}.")
+    print(f"Process complete for '{file_name}' for user '{user_id}'.")
 
 
 def transcribe_video(gcs_uri: str) -> str:
     """Transcribes the audio from a video file stored in GCS."""
     client = speech.SpeechClient()
-
     audio = speech.RecognitionAudio(uri=gcs_uri)
-
-    # Configure Speech-to-Text for video transcription
+    
     config = speech.RecognitionConfig(
-        encoding=speech.RecognitionConfig.AudioEncoding.MP4, # Adjust if you use other formats like MOV
-        sample_rate_hertz=16000, # A common sample rate
+        encoding=speech.RecognitionConfig.AudioEncoding.MP4,
+        sample_rate_hertz=16000,
         language_code="en-US",
         enable_automatic_punctuation=True,
         use_enhanced=True,
@@ -71,9 +84,8 @@ def transcribe_video(gcs_uri: str) -> str:
 
     operation = client.long_running_recognize(config=config, audio=audio)
     print("Waiting for transcription to complete...")
-    response = operation.result(timeout=900) # Timeout after 15 minutes
+    response = operation.result(timeout=1800) # Timeout after 30 minutes for longer videos
 
-    # Concatenate all the transcript parts
     transcript_parts = [result.alternatives[0].transcript for result in response.results]
     return "\n".join(transcript_parts)
 
@@ -81,10 +93,8 @@ def transcribe_video(gcs_uri: str) -> str:
 def generate_feedback_report(transcript: str) -> str:
     """Uses Gemini to generate a feedback report from a transcript."""
     vertexai.init(project=PROJECT_ID, location=LOCATION)
-
     model = GenerativeModel("gemini-1.5-flash-001")
-
-    # This is the detailed prompt from our design document.
+    
     prompt = f"""
     You are an expert ESL teaching coach. Your task is to analyze the following transcript from an ESL class and provide a feedback report. The report should be divided into two sections: "Strengths" and "Improvements".
 
@@ -117,15 +127,15 @@ def generate_feedback_report(transcript: str) -> str:
     return response.text
 
 
-def save_report(original_file_name: str, report_text: str):
-    """Saves the generated report to the reports GCS bucket."""
+def save_report(user_id: str, original_file_name: str, report_text: str):
+    """Saves the generated report to a user-specific folder in the reports bucket."""
     storage_client = storage.Client()
     bucket = storage_client.bucket(REPORTS_BUCKET_NAME)
-
-    # Create a name for the report file based on the original video name
-    report_file_name = f"feedback-for-{original_file_name}.txt"
-
+    
+    # Create a user-specific path for the report
+    report_file_name = f"reports/{user_id}/feedback-for-{original_file_name}.txt"
+    
     blob = bucket.blob(report_file_name)
-    blob.upload_from_string(report_text, content_type="text/plain")
-
+    blob.upload_from_string(report_text, content_type="text/plain; charset=utf-8")
+    
     print(f"Report saved to gs://{REPORTS_BUCKET_NAME}/{report_file_name}")
